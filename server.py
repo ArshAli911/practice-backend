@@ -94,6 +94,8 @@ while True:
     else:
         new_session = False
 
+
+
     # Only POST requests are expected to carry a form body here.
     body = raw_body or None
     if method != "POST":
@@ -116,7 +118,11 @@ while True:
     if handler:
         # Handlers receive the resolved session_id so they can read/write session data.
         resp_dict = handler(method, path,session_id, body)
-        
+        if new_session:
+            resp_dict["headers"]["Set-Cookie"] = (
+                f"session_id={session_id}; Path=/; HttpOnly; SameSite=Lax"
+            )
+
         # Convert dict → HTTP string
         http_response = build_http_response(resp_dict)
 
