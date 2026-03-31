@@ -18,12 +18,13 @@ def extract_data_body(body):
         f.write(f"{username}: {message}\n")
     return username, message
 
-def home_handler(path,method, body =None ):
-    
+def home_handler(method, path, session_id=None, body=None):
+    with open("index.html", "r", encoding="utf-8") as f:
+        page = f.read()
     return {
         "status": 200,
         "headers": {"Content-Type": "text/html"},
-        "body": "<h1>Home Page</h1>"
+        "body": page
     }
 
 def about_handler(response, path,session_id= None, body=None):
@@ -46,30 +47,44 @@ def not_found_handler(request):
     }
 
 def submit_handler(method, path,session_id= None, body=None):
-    username, message = extract_data_body(body)
-    saved_messages = load_messages()
+    extract_data_body(body)
     set_session_data(session_id, "flash", "Message sent")
     return {
         "status": 303,
         "headers": {"Content-Type": "text/html", "Location": "/messages"},
         "body": ""
     }
-def messages_handler(method, path,session_id= None, body=None):                                                                                            
+def messages_handler(method, path,session_id= None, body=None):
     saved_messages = load_messages()
     msg = get_session_data(session_id, "flash")
-    del_session_data(session_id, "flash")                                                                                                      
-    return {                                                                                                                              
-          "status": 200,                                                                                                                    
-          "headers": {"Content-Type": "text/html"},                                                                                         
+    del_session_data(session_id, "flash")
+
+    flash_html = f"<p>{html.escape(msg)}</p>" if msg else ""
+    messages_html = f"<pre>{saved_messages}</pre>" if saved_messages else "<p>No messages yet.</p>"
+
+    return {
+          "status": 200,
+          "headers": {"Content-Type": "text/html"},
           "body": (
-              "<h1>Messages</h1>"                                                                                                           
-              f"<pre>{saved_messages}</pre>"
-              '<a href="/">Back</a>'                                                                                                        
-          )                                                                                                                                 
-      }  
+              "<!doctype html>"
+              "<html lang='en'>"
+              "<head>"
+              "<meta charset='utf-8'>"
+              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+              "<title>Messages</title>"
+              "</head>"
+              "<body>"
+              "<h1>Messages</h1>"
+              f"{flash_html}"
+              f"{messages_html}"
+              "<p><a href='/'>Back to home</a></p>"
+              "</body>"
+              "</html>"
+          )
+      }
 def load_messages():
     try:
-        with open("message.txt", "r", encoding = "utf-8") as f:
+        with open("messages.txt", "r", encoding = "utf-8") as f:
             return html.escape(f.read(), quote=True)
     except FileNotFoundError:
         return ""
@@ -82,9 +97,9 @@ routes = {
 method_routes = {
         ("GET","/"): home_handler,
         ("POST","/about"): about_handler,
-         ("POST","/contacts"): contact_handler,
-         ("POST","/submit"): submit_handler,
-         ("GET", "/messages"): messages_handler,
+        ("POST","/contacts"): contact_handler,
+        ("POST","/submit"): submit_handler,
+        ("GET", "/messages"): messages_handler,
     }
 
     

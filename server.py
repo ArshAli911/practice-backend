@@ -1,10 +1,12 @@
 import socket
 import os
+from datetime import datetime, timedelta, timezone
 from route import method_routes, EXTENSION
 from sessions import create_sessions, get_session
 
 HOST = '127.0.0.1'
 PORT = 8080
+SESSION_TTL_SECONDS = 3600
 
 
 # Converts your handler's dict into a valid HTTP response string
@@ -36,6 +38,14 @@ def parse_cookies(cookie_header):
             key, val = item.strip().split("=", 1)
             cookies[key] = val
     return cookies
+
+def build_session_cookie(session_id):
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=SESSION_TTL_SECONDS)
+    expires_text = expires_at.strftime("%a, %d %b %Y %H:%M:%S GMT")
+    return (
+        f"session_id={session_id}; Path=/; Max-Age={SESSION_TTL_SECONDS}; "
+        f"Expires={expires_text}; HttpOnly; SameSite=Lax"
+    )
 
 
 # Create TCP socket (IPv4 + TCP)
@@ -89,7 +99,7 @@ while True:
 
     # Reuse a known session; otherwise start a fresh one.
     if not session_id or get_session(session_id) is None:
-        session_id = create_sessions()
+        session_id = create_sessions(SESSION_TTL_SECONDS)
         new_session = True
     else:
         new_session = False
@@ -119,9 +129,7 @@ while True:
         # Handlers receive the resolved session_id so they can read/write session data.
         resp_dict = handler(method, path,session_id, body)
         if new_session:
-            resp_dict["headers"]["Set-Cookie"] = (
-                f"session_id={session_id}; Path=/; HttpOnly; SameSite=Lax"
-            )
+            resp_dict["headers"]["Set-Cookie"] = build_session_cookie(session_id)
 
         # Convert dict → HTTP string
         http_response = build_http_response(resp_dict)
@@ -154,7 +162,7 @@ while True:
                 content = file.read()
 
             # Send proper content-type header
-            header = f"HTTP/1.1 200 OK\r\n Content-Type: {EXTENSION[ext]}\r\n\r\n"
+            header = f"HTTP/1.1 200 OK\r\nContent-Type: {EXTENSION[ext]}\r\n\r\n"
 
             conn.send(header.encode() + content)
 
