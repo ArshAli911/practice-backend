@@ -13,6 +13,7 @@ SESSION_TTL_SECONDS = 3600
 def build_http_response(resp):
     status_messages = {
         200: "OK",
+        401: "Unauthorized",
         303: "See Other",
         404: "Not Found",
         405: "Method Not Allowed"

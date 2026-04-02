@@ -1,7 +1,7 @@
 import html
 from urllib.parse import parse_qs
 from sessions import get_session_data, del_session_data,set_session_data
-
+from auth import login_user, get_user_by_username, verify_password
 EXTENSION = {
     ".html": "text/html",
     ".css": "text/css",
@@ -9,7 +9,32 @@ EXTENSION = {
     ".png": "image/png",
     ".jpg": "image/jpeg"
     }
+def login_route(method, path, session_id, body):
+    if method == "GET":
+        return {
+            "status": 200,
+            "headers": {"Content-Type": "text/html"},
+            "body": "<form method='POST'>Username: <input name='username' /><br>Password: <input name='password' type='password' /><br><button type='submit'>Login</button></form>"
+        }
+    elif method == "POST":
+        form_data = parse_qs(body or "")
+        username = form_data.get("username", [""])[0]
+        password = form_data.get("password", [""])[0]
+        user = get_user_by_username(username)
 
+        if user and verify_password(password, user["password_hash"]):
+            login_user(session_id, user)
+            return {
+                "status": 200,
+                "headers": {"Content-Type": "text/html"},
+                "body": "Logged in successfully"
+            }
+
+        return {
+            "status": 401,
+            "headers": {"Content-Type": "text/html"},
+            "body": "Invalid credentials"
+        }
 def extract_data_body(body):
     form_data = parse_qs(body or "")
     username = html.escape(form_data.get("username", ["Guest"])[0], quote=True)
@@ -54,6 +79,7 @@ def submit_handler(method, path,session_id= None, body=None):
         "headers": {"Content-Type": "text/html", "Location": "/messages"},
         "body": ""
     }
+user  = get_l
 def messages_handler(method, path,session_id= None, body=None):
     saved_messages = load_messages()
     msg = get_session_data(session_id, "flash")
@@ -96,11 +122,10 @@ routes = {
     }
 method_routes = {
         ("GET","/"): home_handler,
+        ("GET", "/login"): login_route,
+        ("POST", "/login"): login_route,
         ("POST","/about"): about_handler,
         ("POST","/contacts"): contact_handler,
         ("POST","/submit"): submit_handler,
         ("GET", "/messages"): messages_handler,
     }
-
-    
-    

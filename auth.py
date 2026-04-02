@@ -1,9 +1,22 @@
-import hashlib, hmac, json
+import hashlib
+import hmac
+import json
+
+from sessions import del_session_data, get_session_data, set_session_data
 USERS = []
 
+def load_users():
+    global USERS
+    with open("user.json", "r", encoding="utf-8") as f:
+        USERS = json.load(f)
+
+load_users()
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 def verify_password(password: str, pass_hash: str)-> bool:
-    cal_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    cal_hash = hash_password(password)
     return hmac.compare_digest(cal_hash, pass_hash)
 
 def get_user_by_username(username):                                                                                                       
@@ -18,12 +31,17 @@ def get_user_by_id(user_id):
               return user                                                                                                                   
       return None     
 
+def get_logged_in_user(session_id):
+    user_id = get_session_data(session_id, "user_id")
+    if user_id is None:
+        return None
+    return get_user_by_id(user_id)
 
-def login_user(session, user):
-    session["user_id"] = user["id"]
+def login_user(session_id, user):
+    set_session_data(session_id, "user_id", user["id"])
 
-def logout_user(session):
-    session.pop("user_id", None)
+def logout_user(session_id):
+    del_session_data(session_id, "user_id")
     
 def auth_middleware(request, next_handler):
     session = request.get("session", {})
