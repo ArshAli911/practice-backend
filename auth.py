@@ -1,16 +1,13 @@
 import hashlib
 import hmac
 import json
-
+from db import get_user_by_username, get_user_by_id   
 from sessions import del_session_data, get_session_data, set_session_data
-USERS = []
 
 def load_users():
     global USERS
     with open("user.json", "r", encoding="utf-8") as f:
         USERS = json.load(f)
-
-load_users()
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()

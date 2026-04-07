@@ -3,6 +3,7 @@ from urllib.parse import parse_qs
 from sessions import get_session_data, del_session_data,set_session_data
 from auth import login_user, get_user_by_username, verify_password, get_logged_in_user, USERS, logout_user
 from middleware import redir_if_logged_in,require_login
+from db import add_message, list_messages, get_user_by_id  
 EXTENSION = {
     ".html": "text/html",
     ".css": "text/css",
@@ -48,9 +49,10 @@ def extract_data_body(body):
     form_data = parse_qs(body or "")
     username = html.escape(form_data.get("username", ["Guest"])[0], quote=True)
     message = html.escape(form_data.get("message", [""])[0], quote=True)
-    with open("messages.txt", "a", encoding="utf-8") as f:
-        f.write(f"{username}: {message}\n")
+    add_message(user_id, message)
     return username, message
+
+
 
 def home_handler(method, path, session_id=None, body=None):
     user = get_logged_in_user(session_id)
