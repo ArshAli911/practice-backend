@@ -2,6 +2,7 @@ import html
 from urllib.parse import parse_qs
 from sessions import get_session_data, del_session_data,set_session_data
 from auth import login_user, get_user_by_username, verify_password, get_logged_in_user, USERS, logout_user
+from middleware import redir_if_logged_in,require_login
 EXTENSION = {
     ".html": "text/html",
     ".css": "text/css",
@@ -161,12 +162,12 @@ routes = {
         "/contact": "contacts.html"
     }
 method_routes = {
-        ("GET","/"): home_handler,
-        ("GET", "/login"): login_route,
-        ("POST", "/login"): login_route,
         ("POST","/about"): about_handler,
         ("POST","/contacts"): contact_handler,
         ("POST","/submit"): submit_handler,
-        ("GET", "/messages"): messages_handler,
         ("GET", "/logout"): logout_route,
+        ("GET", "/"): require_login(home_handler),                                                                                                                       
+        ("GET", "/login"): redir_if_logged_in(login_route),                                                                                                           
+        ("POST", "/login"): redir_if_logged_in(login_route),                                                                                                          
+        ("GET", "/messages"): require_login(messages_handler) 
     }

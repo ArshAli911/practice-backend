@@ -3,6 +3,9 @@ import os
 from datetime import datetime, timedelta, timezone
 from route import method_routes, EXTENSION
 from sessions import create_sessions, get_session
+from db import init_db
+
+
 
 HOST = '127.0.0.1'
 PORT = 8080
@@ -30,7 +33,7 @@ def build_http_response(resp):
     # Final HTTP format: status + headers + blank line + body
     return status_line + headers + "\r\n" + resp["body"]
 
-
+init_db()
 def parse_cookies(cookie_header):
     # Convert "a=1; b=2" into {"a": "1", "b": "2"}.
     cookies = {}
