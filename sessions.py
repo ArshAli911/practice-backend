@@ -45,3 +45,17 @@ def del_session_data(session_id,key):
     sess = session[session_id]["data"]
     if key in sess:
         del sess[key]
+def delete_session(session_id):
+    session.pop(session_id, None)
+
+def rotate_session(session_id, ttl_s):
+    old_data = {}
+    if not _is_expired(session_id):
+        old_data =  session[session_id]["data"].copy()
+        delete_session(session_id)
+
+    new_session_id = create_sessions(ttl_s)
+    session[new_session_id]["data"].update(old_data)
+    return new_session_id
+
+

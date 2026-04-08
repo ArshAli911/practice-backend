@@ -131,6 +131,12 @@ while True:
     if handler:
         # Handlers receive the resolved session_id so they can read/write session data.
         resp_dict = handler(method, path,session_id, body)
+        rotated_session_id = resp_dict.pop("session_id", None)
+        if rotated_session_id is not None:
+            session_id = rotated_session_id
+            resp_dict["header"]["Cookie"] = build_session_cookie(session_id)
+        elif new_session:
+            resp_dict["headers"]["Set-Cookie"] = build_session_cookie(session_id)
         if new_session:
             resp_dict["headers"]["Set-Cookie"] = build_session_cookie(session_id)
 

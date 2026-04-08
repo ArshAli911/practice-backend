@@ -1,9 +1,9 @@
 import html
 from urllib.parse import parse_qs
-from sessions import get_session_data, del_session_data,set_session_data
-from auth import login_user, get_user_by_username, verify_password, get_logged_in_user, USERS, logout_user
+from sessions import get_session_data, del_session_data, set_session_data, rotate_session 
+from auth import login_user, get_user_by_username, verify_password, get_logged_in_user, logout_user
 from middleware import redir_if_logged_in,require_login
-from db import add_message, list_messages, get_user_by_id  
+from db import add_message, list_messages
 EXTENSION = {
     ".html": "text/html",
     ".css": "text/css",
@@ -11,13 +11,16 @@ EXTENSION = {
     ".png": "image/png",
     ".jpg": "image/jpeg"
     }
-
+sess = rotate_session
 def login_route(method, path, session_id, body):
+    new_session_id = rotate_session(session_id, 3600)
+    login_user(new_session_id, user)
     if method == "GET":
         return {
             "status": 200,
             "headers": {"Content-Type": "text/html"},
-            "body": "<form method='POST'>Username: <input name='username' /><br>Password: <input name='password' type='password' /><br><button type='submit'>Login</button></form>"
+            "body": "<form method='POST'>Username: <input name='username' /><br>Password: <input name='password' type='password' /><br><button type='submit'>Login</button></form>",
+            "session_id" :new_session_id
         }
     elif method == "POST":
         form_data = parse_qs(body or "")
@@ -45,12 +48,11 @@ def logout_route(method, path, session_id, body):
         "headers": {"Content-type": "text/html", "Location": "/login"},
         "body": ""
    }
-def extract_data_body(body):
+def extract_data_body(body, user_id):
     form_data = parse_qs(body or "")
-    username = html.escape(form_data.get("username", ["Guest"])[0], quote=True)
     message = html.escape(form_data.get("message", [""])[0], quote=True)
     add_message(user_id, message)
-    return username, message
+    return message
 
 
 
@@ -107,7 +109,15 @@ def not_found_handler(request):
     }
 
 def submit_handler(method, path,session_id= None, body=None):
-    extract_data_body(body)
+    user = get_logged_in_user(session_id)                                                                                             
+    if user is None:                                                                                                                  
+        return {                                                                                                                      
+            "status": 303,                                                                                                            
+            "headers": {"Content-Type": "text/html", "Location": "/login"},                                                           
+            "body": ""                                                                                                                
+        }                                                                                                                             
+                
+    extract_data_body(body, user["id"])
     set_session_data(session_id, "flash", "Message sent")
     return {
         "status": 303,
@@ -152,11 +162,10 @@ def messages_handler(method, path,session_id= None, body=None):
           )
       }
 def load_messages():
-    try:
-        with open("messages.txt", "r", encoding = "utf-8") as f:
-            return html.escape(f.read(), quote=True)
-    except FileNotFoundError:
-        return ""
+    rows = list_messages()
+    return "\n".join(
+        f"{row['username']}: {row['content']}" for row in rows
+    )
 
 routes = {
         "/": "index.html",
