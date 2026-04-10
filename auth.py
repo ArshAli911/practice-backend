@@ -24,7 +24,8 @@ def get_logged_in_user(session_id):
 def login_user(session_id, user):
     set_session_data(session_id, "user_id", user["id"])
 
-
+def is_admin(user):
+    return user is not None and user["role"] == "admin"
 def logout_user(session_id):
     del_session_data(session_id, "user_id")
 

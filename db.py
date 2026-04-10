@@ -1,4 +1,3 @@
-import json
 import sqlite3
 
 db_name= "app.db"
@@ -15,9 +14,17 @@ cur.execute("""
 CREATE TABLE IF NOT EXISTS users(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
-            password_hash BLOB NOT NULL
+            password_hash BLOB NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user' 
             )
 """)
+
+user_columns = {
+    row["name"]
+    for row in cur.execute("PRAGMA table_info(users)").fetchall()
+}
+if "role" not in user_columns:
+    cur.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
     
 cur.execute("""
 CREATE TABLE IF NOT EXISTS messages(
@@ -28,7 +35,6 @@ CREATE TABLE IF NOT EXISTS messages(
             FOREIGN KEY(user_id) REFERENCES users(id)
             )
 """)
-
 conn.commit()
 conn.close()
 
@@ -52,14 +58,14 @@ def get_user_by_id(user_id):
     conn.close()
     return user
 
-def create_user_db(username, password_hash):
+def create_user_db(username, password_hash, role="user"):
     conn = get_conn()
     cur = conn.cursor()
 
     try:
         cur.execute(
-            "INSERT INTO users (username, password_hash) VALUES (?,?)",
-            (username, password_hash)
+            "INSERT INTO users (username, password_hash, role) VALUES (?,?,?)",
+            (username, password_hash, role)
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -96,5 +102,4 @@ def list_messages():
 
     return rows
     
-
 
