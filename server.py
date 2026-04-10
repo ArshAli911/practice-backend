@@ -15,6 +15,7 @@ def build_http_response(resp):
     status_messages = {
         200: "OK",
         401: "Unauthorized",
+        403: "Forbidden",
         303: "See Other",
         404: "Not Found",
         405: "Method Not Allowed",
@@ -47,6 +48,34 @@ def build_session_cookie(session_id):
     )
 
 
+def read_http_request(conn):
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = conn.recv(1024)
+        if not chunk:
+            break
+        data += chunk
+
+    header_bytes, _, body = data.partition(b"\r\n\r\n")
+    header_text = header_bytes.decode("utf-8", errors="replace")
+    header_lines = header_text.split("\r\n")
+
+    headers = {}
+    for line in header_lines[1:]:
+        if ":" in line:
+            key, val = line.split(":", 1)
+            headers[key.strip()] = val.strip()
+
+    content_length = int(headers.get("Content-Length", "0"))
+    while len(body) < content_length:
+        chunk = conn.recv(1024)
+        if not chunk:
+            break
+        body += chunk
+
+    return header_lines, headers, body.decode("utf-8", errors="replace")
+
+
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.bind((HOST, PORT))
 server_socket.listen(5)
@@ -55,49 +84,18 @@ print("Server is running...")
 
 while True:
     conn, addr = server_socket.accept()
-    def read_http_request(conn):
-        data = b""
-        while b"/r/n/r/n" not in data:
-            chunk = conn.recv(1024)
-            if not chunk:
-                break
-            data += chunk
-        header_bytes, sep, body = data.partition(b"/r/n/r/n")
-        header_text = header_bytes.decode("utf-8", errors = "replace")
-        header_lines = header_text.split("/r/n")
-        header = {}
-        for line in header_lines[1:]:
-            if ':' in line:
-                key, val = line.split(":", 1)
-                headers[key.strip()] = val.strip()
-        content_length = int(headers.get("Content-length", "0"))
-        while len(body) < content_length:
-            chunk = conn.recv(1024)
-            if not chunk:
-                break
-            body += chunk
-        return header_lines, headers, body.decode("utf-8", errors="replace")
-    
-    data = conn.recv(1024)
-    if not data:
+
+    header_lines, headers, raw_body = read_http_request(conn)
+    if not header_lines or not header_lines[0]:
         conn.close()
         continue
 
-    request_text = data.decode("utf-8", errors="replace")
-    header_text, _, raw_body = request_text.partition("\r\n\r\n")
-    header_lines, headers, raw_body = read_http_request(conn)
     request_line = header_lines[0]
     try:
         method, path, version = request_line.split()
     except Exception:
         conn.close()
         continue
-
-    headers = {}
-    for line in header_lines[1:]:
-        if ":" in line:
-            key, val = line.split(":", 1)
-            headers[key.strip()] = val.strip()
 
     cookies = parse_cookies(headers.get("Cookie", ""))
     session_id = cookies.get("session_id")
@@ -113,7 +111,6 @@ while True:
         body = None
 
     path = path.split("?", 1)[0]
-
     if path != "/" and path.endswith("/"):
         path = path.rstrip("/")
 
@@ -159,8 +156,5 @@ while True:
     except FileNotFoundError:
         response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\n\r\n<h1>404 Not Found</h1>"
         conn.send(response.encode())
-
-    if body is not None:
-        print(body)
 
     conn.close()

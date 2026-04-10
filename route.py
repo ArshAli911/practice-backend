@@ -9,7 +9,7 @@ from auth import (
     verify_password,
 )
 from db import add_message, list_messages
-from middleware import redir_if_logged_in, require_login
+from middleware import redir_if_logged_in, require_login, require_role
 from sessions import del_session_data, get_session_data, rotate_session, set_session_data
 
 EXTENSION = {
@@ -19,6 +19,15 @@ EXTENSION = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
 }
+
+
+def admin_handler(method, path, session_id=None, body=None):
+    user = get_logged_in_user(session_id)
+    return {
+        "status": 200,
+        "headers": {"Content-Type": "text/html"},
+        "body": f"<h1>Admin Page</h1><p>Welcome, {html.escape(user['username'])}</p>",
+    }
 
 
 def login_route(method, path, session_id, body):
@@ -202,4 +211,5 @@ method_routes = {
     ("GET", "/login"): redir_if_logged_in(login_route),
     ("POST", "/login"): redir_if_logged_in(login_route),
     ("GET", "/messages"): require_login(messages_handler),
+    ("GET", "/admin"): require_role("admin")(admin_handler),
 }

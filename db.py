@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS users(
             role TEXT NOT NULL DEFAULT 'user' 
             )
 """)
-
+cur.execute(" UPDATE users SET role = 'admin' WHERE username = 'demo';")
 user_columns = {
     row["name"]
     for row in cur.execute("PRAGMA table_info(users)").fetchall()
