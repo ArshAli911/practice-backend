@@ -134,7 +134,7 @@ while True:
             conn.send(error_response(413, "<h1>Payload Too Large</h1>").encode())
         else:
             conn.send(error_response(400, "<h1>Bad Request</h1>").encode())
-        logger.warning("bad request ip=%s reason=%s", client_ip, exec)
+        logger.warning("bad_request ip=%s reason=%s", client_ip, exc)
         conn.close()
         continue
     if not header_lines or not header_lines[0]:

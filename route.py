@@ -78,12 +78,12 @@ def login_route(method, path, session_id, body):
     elif method == "POST":
         form_data = parse_qs(body or "")
         if not verify_csrf_token(session_id, form_data):
+            logger.warning("csrf_failed route=/login session_id=%s", session_id)
             return {
                 "status": 403,
                 "headers": {"Content-type": "text/html"},
                 "body": "<h1>Forbidden</h1><p>Invalid CSRF Token</p>",
             }
-        logger.warning("csrf_failed route=/login session_id=%s", session_id)
         username = form_data.get("username", [""])[0]
         password = form_data.get("password", [""])[0]
         user = get_user_by_username(username)
@@ -91,7 +91,7 @@ def login_route(method, path, session_id, body):
         if user and verify_password(password, user["password_hash"]):
             new_session_id = rotate_session(session_id, 3600)
             login_user(new_session_id, user)
-            logger.info("login_success username%s", username)
+            logger.info("login_success username=%s", username)
             refresh_csrf_token(new_session_id)
             return {
                 "status": 303,
@@ -185,9 +185,9 @@ def submit_handler(method, path, session_id=None, body=None):
             "headers": {"Content-Type": "text/html", "Location": "/login"},
             "body": "",
         }
-    logger.warning("csrf_failed route=/submit session_id=%s", session_id)
     form_data = parse_qs(body or "")                                                                                                      
     if not verify_csrf_token(session_id, form_data):                                                                                      
+        logger.warning("csrf_failed route=/submit session_id=%s", session_id)
         return {                                                                                                                          
           "status": 403,                                                                                                                
           "headers": {"Content-Type": "text/html"},                                                                                     
