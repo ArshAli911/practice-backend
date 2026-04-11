@@ -1,9 +1,11 @@
 import os
 import socket
 from datetime import datetime, timedelta, timezone
-
+from rate_limit import rate_limited
 from route import EXTENSION, method_routes
 from sessions import create_sessions, get_session
+from login_config import setup_logging
+
 
 
 HOST = "127.0.0.1"
@@ -13,10 +15,15 @@ SESSION_TTL_SECONDS = 3600
 MAX_HEADER_BYTES = 8192                                                                                                               
 MAX_BODY_BYTES = 1024 * 1024                                                                                                          
 RECV_CHUNK_SIZE = 1024 
-
+GENERAL_RATE_LIMIT = 100                                                                                                              
+GENERAL_RATE_WINDOW_SECONDS = 60                                                                                                      
+                                                                                                                                      
+LOGIN_RATE_LIMIT = 5                                                                                                                  
+LOGIN_RATE_WINDOW_SECONDS = 60 
 
 class RequestParseError(Exception):
     pass
+
 
 
 def build_http_response(resp):
@@ -49,7 +56,7 @@ def error_response(status, body):
         "body": body,
     })
 
-
+logger = setup_logging()
 def parse_cookies(cookie_header):
     cookies = {}
     for item in cookie_header.split(";"):
@@ -112,10 +119,12 @@ server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.bind((HOST, PORT))
 server_socket.listen(5)
 
-print("Server is running...")
+logger.info("Server is running on %s:%s", HOST, PORT)                                                         
 
 while True:
     conn, addr = server_socket.accept()
+    client_ip = addr[0]  
+    general_key = f"general:{client_ip}"
 
     try:
         header_lines, headers, raw_body = read_http_request(conn)
@@ -125,6 +134,7 @@ while True:
             conn.send(error_response(413, "<h1>Payload Too Large</h1>").encode())
         else:
             conn.send(error_response(400, "<h1>Bad Request</h1>").encode())
+        logger.warning("bad request ip=%s reason=%s", client_ip, exec)
         conn.close()
         continue
     if not header_lines or not header_lines[0]:
@@ -156,6 +166,19 @@ while True:
         conn.close()
         continue
 
+    if rate_limited(general_key, GENERAL_RATE_LIMIT, GENERAL_RATE_WINDOW_SECONDS):
+        conn.send(error_response(429, "<h1>Too Many Requests</h1>").encode())
+        logger.warning("rate_limited ip=%s scope=general", client_ip) 
+        conn.close()
+        continue
+    if method == "POST" and path == "/login":
+        login_key = f"login:{client_ip}"
+        if rate_limited(login_key, LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW_SECONDS):
+            conn.send(error_response(429, "<h1>Too Many Login Attempts</h1>").encode())
+            logger.warning("rate_limited ip=%s scope=login path=%s", client_ip, path)   
+            conn.close()
+            continue
+
     cookies = parse_cookies(headers.get("Cookie", ""))
     session_id = cookies.get("session_id")
 
@@ -173,7 +196,7 @@ while True:
     if path != "/" and path.endswith("/"):
         path = path.rstrip("/")
 
-    print(method, path)
+    logger.info("request method=%s path=%s ip=%s", method, path, client_ip)
 
     handler = method_routes.get((method, path))
 
@@ -215,5 +238,4 @@ while True:
     except FileNotFoundError:
         response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\n\r\n<h1>404 Not Found</h1>"
         conn.send(response.encode())
-
     conn.close()

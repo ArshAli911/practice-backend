@@ -3,6 +3,7 @@ from urllib.parse import parse_qs
 import secrets
 import hmac
 from sessions import get_session_data, set_session_data
+from login_config import setup_logging
 
 
 from auth import (
@@ -15,7 +16,7 @@ from auth import (
 from db import add_message, list_messages
 from middleware import redir_if_logged_in, require_login, require_role
 from sessions import del_session_data, get_session_data, rotate_session, set_session_data
-
+logger = setup_logging()
 EXTENSION = {
     ".html": "text/html",
     ".css": "text/css",
@@ -82,6 +83,7 @@ def login_route(method, path, session_id, body):
                 "headers": {"Content-type": "text/html"},
                 "body": "<h1>Forbidden</h1><p>Invalid CSRF Token</p>",
             }
+        logger.warning("csrf_failed route=/login session_id=%s", session_id)
         username = form_data.get("username", [""])[0]
         password = form_data.get("password", [""])[0]
         user = get_user_by_username(username)
@@ -89,6 +91,7 @@ def login_route(method, path, session_id, body):
         if user and verify_password(password, user["password_hash"]):
             new_session_id = rotate_session(session_id, 3600)
             login_user(new_session_id, user)
+            logger.info("login_success username%s", username)
             refresh_csrf_token(new_session_id)
             return {
                 "status": 303,
@@ -96,7 +99,8 @@ def login_route(method, path, session_id, body):
                 "body": "",
                 "session_id": new_session_id,
             }
-
+        else:
+            logger.warning("login_failed username=%s", username)
         return {
             "status": 401,
             "headers": {"Content-Type": "text/html"},
@@ -181,6 +185,7 @@ def submit_handler(method, path, session_id=None, body=None):
             "headers": {"Content-Type": "text/html", "Location": "/login"},
             "body": "",
         }
+    logger.warning("csrf_failed route=/submit session_id=%s", session_id)
     form_data = parse_qs(body or "")                                                                                                      
     if not verify_csrf_token(session_id, form_data):                                                                                      
         return {                                                                                                                          
