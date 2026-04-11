@@ -29,7 +29,8 @@ def build_http_response(resp):
         404: "Not Found",
         405: "Method Not Allowed",
         413: "Payload Too Large",
-        414: "URL Too Long"
+        414: "URL Too Long",
+        429: "Too Many Requests",
     }
 
     status_line = f"HTTP/1.1 {resp['status']} {status_messages.get(resp['status'], '')}\r\n"
