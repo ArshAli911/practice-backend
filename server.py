@@ -1,47 +1,43 @@
 import os
 import socket
+import threading
+import time
 from datetime import datetime, timedelta, timezone
-from db import init_db
-from limits import MAX_BODY_BYTES, MAX_HEADER_BYTES
-from rate_limit import rate_limited
-from route import EXTENSION, method_routes
-from sessions import create_sessions, get_session
-from login_config import setup_logging
 from urllib.parse import parse_qs
 
+from config import (
+    GENERAL_RATE_LIMIT,
+    GENERAL_RATE_WINDOW_SECONDS,
+    HOST,
+    LOGIN_RATE_LIMIT,
+    LOGIN_RATE_WINDOW_SECONDS,
+    MAX_BODY_BYTES,
+    MAX_CONCURRENT_CONNECTIONS,
+    MAX_FORM_FIELDS,
+    MAX_HEADER_BYTES,
+    PORT,
+    RECV_CHUNK_SIZE,
+    SESSION_CLEANUP_INTERVAL_SECONDS,
+    SESSION_TTL_SECONDS,
+    SOCKET_BACKLOG,
+)
+from db import init_db
+from login_config import setup_logging
+from rate_limit import rate_limited
+from responses import STATUS_MESSAGES, error_response
+from route import EXTENSION, method_routes
+from sessions import cleanup_expired_sessions, create_sessions, get_session
 
-HOST = "127.0.0.1"
-PORT = 8080
-SESSION_TTL_SECONDS = 3600
-
-RECV_CHUNK_SIZE = 1024 
-GENERAL_RATE_LIMIT = 100                                                                                                              
-GENERAL_RATE_WINDOW_SECONDS = 60                                                                                                      
-                                                                                                                                      
-LOGIN_RATE_LIMIT = 5                                                                                                                  
-LOGIN_RATE_WINDOW_SECONDS = 60 
 
 class RequestParseError(Exception):
     pass
 
 
+logger = setup_logging()
+
 
 def build_http_response(resp):
-    status_messages = {
-        200: "OK",
-        400: "Bad Request",
-        401: "Unauthorized",
-        403: "Forbidden",
-        303: "See Other",
-        404: "Not Found",
-        405: "Method Not Allowed",
-        413: "Payload Too Large",
-        414: "URL Too Long",
-        429: "Too Many Requests",
-        500: "Internal Server Error",
-    }
-
-    status_line = f"HTTP/1.1 {resp['status']} {status_messages.get(resp['status'], '')}\r\n"
+    status_line = f"HTTP/1.1 {resp['status']} {STATUS_MESSAGES.get(resp['status'], '')}\r\n"
 
     headers = ""
     for k, v in resp["headers"].items():
@@ -49,18 +45,9 @@ def build_http_response(resp):
 
     return status_line + headers + "\r\n" + resp["body"]
 
- 
-def error_response(status, body):
-    return build_http_response({
-        "status": status,
-        "headers": {"Content-Type": "text/html"},
-        "body": body,
-    })
 
-logger = setup_logging()
-
-
-init_db()
+def send_response(conn, resp):
+    conn.sendall(build_http_response(resp).encode())
 
 
 def parse_cookies(cookie_header):
@@ -93,6 +80,7 @@ def read_http_request(conn):
             raise RequestParseError("headers_too_large")
     if b"\r\n\r\n" not in data:
         raise RequestParseError("incomplete_headers")
+
     header_bytes, _, body = data.partition(b"\r\n\r\n")
     header_text = header_bytes.decode("utf-8", errors="replace")
     header_lines = header_text.split("\r\n")
@@ -104,14 +92,15 @@ def read_http_request(conn):
         if ":" not in line:
             raise RequestParseError("bad_header")
         key, val = line.split(":", 1)
-        headers[key.strip()] = val.strip()
+        headers[key.strip().lower()] = val.strip()
 
-    content_length_text = headers.get("Content-Length", "0")
+    content_length_text = headers.get("content-length", "0")
     if not content_length_text.isdigit():
         raise RequestParseError("bad_content_length")
     content_length = int(content_length_text)
     if content_length > MAX_BODY_BYTES:
         raise RequestParseError("body_too_large")
+
     while len(body) < content_length:
         chunk = conn.recv(RECV_CHUNK_SIZE)
         if not chunk:
@@ -121,133 +110,180 @@ def read_http_request(conn):
     return header_lines, headers, body[:content_length].decode("utf-8", errors="replace")
 
 
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server_socket.bind((HOST, PORT))
-server_socket.listen(5)
-
-logger.info("Server is running on %s:%s", HOST, PORT)                                                         
-
-while True:
-    conn, addr = server_socket.accept()
-    client_ip = addr[0]  
-    general_key = f"general:{client_ip}"
-
-    try:
-        header_lines, headers, raw_body = read_http_request(conn)
-    except RequestParseError as exc:
-        reason = str(exc)
-        if reason in {"headers_too_large", "body_too_large"}:
-            conn.send(error_response(413, "<h1>Payload Too Large</h1>").encode())
-        else:
-            conn.send(error_response(400, "<h1>Bad Request</h1>").encode())
-        logger.warning("bad_request ip=%s reason=%s", client_ip, exc)
-        conn.close()
-        continue
+def validate_request_line(header_lines):
     if not header_lines or not header_lines[0]:
-        conn.close()
-        continue
+        raise RequestParseError("empty_request_line")
 
-    request_line = header_lines[0]
-    parts = request_line.split()
+    parts = header_lines[0].split()
     if len(parts) != 3:
-        conn.send(error_response(400, "<h1>Bad Request</h1>").encode())
-        conn.close()
-        continue
+        raise RequestParseError("bad_request_line")
+
     method, path, version = parts
-
     if method not in {"GET", "POST"}:
-        conn.send(error_response(405, "<h1>Method Not Allowed</h1>").encode())
-        conn.close()
-        continue
+        raise RequestParseError("method_not_allowed")
     if not path.startswith("/"):
-        conn.send(error_response(400, "<h1>Bad Request</h1>").encode())
-        conn.close()
-        continue
+        raise RequestParseError("bad_path")
     if len(path) > 2048:
-        conn.send(error_response(414, "<h1>URI Too Long</h1>").encode())
-        conn.close()
-        continue
+        raise RequestParseError("url_too_long")
     if version not in {"HTTP/1.0", "HTTP/1.1"}:
-        conn.send(error_response(400, "<h1>Bad Request</h1>").encode())
-        conn.close()
-        continue
+        raise RequestParseError("bad_http_version")
 
-    if rate_limited(general_key, GENERAL_RATE_LIMIT, GENERAL_RATE_WINDOW_SECONDS):
-        conn.send(error_response(429, "<h1>Too Many Requests</h1>").encode())
-        logger.warning("rate_limited ip=%s scope=general", client_ip) 
-        conn.close()
-        continue
-    if method == "POST" and path == "/login":
-        login_key = f"login:{client_ip}"
-        if rate_limited(login_key, LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW_SECONDS):
-            conn.send(error_response(429, "<h1>Too Many Login Attempts</h1>").encode())
-            logger.warning("rate_limited ip=%s scope=login path=%s", client_ip, path)   
-            conn.close()
-            continue
+    return method, path
 
-    cookies = parse_cookies(headers.get("Cookie", ""))
-    session_id = cookies.get("session_id")
 
-    if not session_id or get_session(session_id) is None:
-        session_id = create_sessions(SESSION_TTL_SECONDS)
-        new_session = True
-    else:
-        new_session = False
-
+def route_request(conn, method, path, headers, raw_body, session_id, new_session):
     body = raw_body or None
     if method != "POST":
         body = None
+
     route_path, _, query_string = path.partition("?")
-    query_params = parse_qs(query_string)
+    try:
+        query_params = parse_qs(query_string, max_num_fields=MAX_FORM_FIELDS)
+    except ValueError:
+        send_response(conn, error_response(413, "Too many query parameters"))
+        return
+
     path = route_path
     if path != "/" and path.endswith("/"):
         path = path.rstrip("/")
 
-    logger.info("request method=%s path=%s ip=%s", method, path, client_ip)
-
     handler = method_routes.get((method, path))
     if handler:
-        try:
-            resp_dict = handler(method, path, session_id, body, query_params)
-            rotated_session_id = resp_dict.pop("session_id", None)
-            if rotated_session_id is not None:
-                session_id = rotated_session_id
-                resp_dict["headers"]["Set-Cookie"] = build_session_cookie(session_id)
-            elif new_session:
-                resp_dict["headers"]["Set-Cookie"] = build_session_cookie(session_id)
-            http_response = build_http_response(resp_dict)
-            conn.send(http_response.encode())
-        except Exception:
-            logger.exception("handler_error method=%s path=%s ip=%s", method, path, client_ip)
-            conn.send(error_response(500, "<h1>Internal Server Error</h1>").encode())
-        conn.close()
-        continue
+        resp_dict = handler(method, path, session_id, body, query_params)
+        rotated_session_id = resp_dict.pop("session_id", None)
+        if rotated_session_id is not None:
+            session_id = rotated_session_id
+            resp_dict["headers"]["Set-Cookie"] = build_session_cookie(session_id)
+        elif new_session:
+            resp_dict["headers"]["Set-Cookie"] = build_session_cookie(session_id)
+        send_response(conn, resp_dict)
+        return
 
-    if path == "/":
-        file_name = "index.html"
-    else:
-        file_name = path.lstrip("/")
+    serve_static_file(conn, path)
 
-    name, ext = os.path.splitext(file_name)
+
+def serve_static_file(conn, path):
+    file_name = "index.html" if path == "/" else path.lstrip("/")
+    safe_path = os.path.normpath(file_name)
+    if safe_path.startswith("..") or os.path.isabs(safe_path):
+        send_response(conn, error_response(403, "Forbidden"))
+        return
+
+    _, ext = os.path.splitext(safe_path)
 
     try:
         if ext in EXTENSION:
-            with open(file_name, "rb") as file:
+            with open(safe_path, "rb") as file:
                 content = file.read()
 
             header = f"HTTP/1.1 200 OK\r\nContent-Type: {EXTENSION[ext]}\r\n\r\n"
-            conn.send(header.encode() + content)
+            conn.sendall(header.encode() + content)
         else:
-            with open(file_name, "r") as file:
+            with open(safe_path, "r", encoding="utf-8") as file:
                 content = file.read()
 
-            response = f"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n{content}"
-            conn.send(response.encode())
-
+            send_response(conn, {
+                "status": 200,
+                "headers": {"Content-Type": "text/html"},
+                "body": content,
+            })
     except FileNotFoundError:
-        response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\n\r\n<h1>404 Not Found</h1>"
-        conn.send(response.encode())
+        send_response(conn, error_response(404, "Not Found"))
     except Exception:
-        logger.exception("static_file_error path=%s file=%s ip=%s", path, file_name, client_ip)
-        conn.send(error_response(500, "<h1>Internal Server Error</h1>").encode())
-    conn.close()
+        logger.exception("static_file_error path=%s file=%s", path, safe_path)
+        send_response(conn, error_response(500, "Internal Server Error"))
+
+
+def handle_client(conn, addr):
+    client_ip = addr[0]
+    try:
+        try:
+            header_lines, headers, raw_body = read_http_request(conn)
+            method, path = validate_request_line(header_lines)
+        except RequestParseError as exc:
+            reason = str(exc)
+            if reason in {"headers_too_large", "body_too_large"}:
+                send_response(conn, error_response(413, "Payload Too Large"))
+            elif reason == "url_too_long":
+                send_response(conn, error_response(414, "URI Too Long"))
+            elif reason == "method_not_allowed":
+                send_response(conn, error_response(405, "Method Not Allowed"))
+            else:
+                send_response(conn, error_response(400, "Bad Request"))
+            logger.warning("bad_request ip=%s reason=%s", client_ip, exc)
+            return
+
+        general_key = f"general:{client_ip}"
+        if rate_limited(general_key, GENERAL_RATE_LIMIT, GENERAL_RATE_WINDOW_SECONDS):
+            send_response(conn, error_response(429, "Too Many Requests"))
+            logger.warning("rate_limited ip=%s scope=general", client_ip)
+            return
+
+        if method == "POST" and path.partition("?")[0] == "/login":
+            login_key = f"login:{client_ip}"
+            if rate_limited(login_key, LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW_SECONDS):
+                send_response(conn, error_response(429, "Too Many Login Attempts"))
+                logger.warning("rate_limited ip=%s scope=login path=%s", client_ip, path)
+                return
+
+        cookies = parse_cookies(headers.get("cookie", ""))
+        session_id = cookies.get("session_id")
+
+        if not session_id or get_session(session_id) is None:
+            session_id = create_sessions(SESSION_TTL_SECONDS)
+            new_session = True
+        else:
+            new_session = False
+
+        route_path = path.partition("?")[0]
+        logger.info("request method=%s path=%s ip=%s", method, route_path, client_ip)
+
+        try:
+            route_request(conn, method, path, headers, raw_body, session_id, new_session)
+        except Exception:
+            logger.exception("handler_error method=%s path=%s ip=%s", method, path, client_ip)
+            send_response(conn, error_response(500, "Internal Server Error"))
+    finally:
+        conn.close()
+
+
+def session_cleanup_loop():
+    while True:
+        time.sleep(SESSION_CLEANUP_INTERVAL_SECONDS)
+        removed = cleanup_expired_sessions()
+        if removed:
+            logger.info("session_cleanup removed=%s", removed)
+
+
+def run_server():
+    init_db()
+    cleanup_thread = threading.Thread(target=session_cleanup_loop, daemon=True)
+    cleanup_thread.start()
+
+    connection_slots = threading.BoundedSemaphore(MAX_CONCURRENT_CONNECTIONS)
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind((HOST, PORT))
+    server_socket.listen(SOCKET_BACKLOG)
+
+    logger.info("Server is running on %s:%s", HOST, PORT)
+
+    while True:
+        connection_slots.acquire()
+        try:
+            conn, addr = server_socket.accept()
+        except Exception:
+            connection_slots.release()
+            raise
+
+        def worker(client_conn=conn, client_addr=addr):
+            try:
+                handle_client(client_conn, client_addr)
+            finally:
+                connection_slots.release()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+
+if __name__ == "__main__":
+    run_server()

@@ -1,12 +1,12 @@
 import sqlite3
 from contextlib import contextmanager
 
-db_name = "app.db"
+from config import DB_NAME
 
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(db_name, timeout=5)
+    conn = sqlite3.connect(DB_NAME, timeout=5)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:
