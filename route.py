@@ -4,7 +4,13 @@ import secrets
 import hmac
 from sessions import get_session_data, set_session_data
 from login_config import setup_logging
-
+from limits import (
+    MAX_FORM_FIELDS,
+    MAX_MESSAGE_CHARS,
+    MAX_PASSWORD_CHARS,
+    MAX_QUERY_PAGE,
+    MAX_USERNAME_CHARS,
+)
 
 from auth import (
     get_logged_in_user,
@@ -17,6 +23,40 @@ from db import add_message, count_messages, list_messages
 from middleware import redir_if_logged_in, require_login, require_role
 from sessions import del_session_data, get_session_data, rotate_session, set_session_data
 logger = setup_logging()
+
+
+class ValidationError(Exception):
+    pass
+
+
+def validation_response(message, status=400):
+    return {
+        "status": status,
+        "headers": {"Content-Type": "text/html"},
+        "body": f"<h1>Bad Request</h1><p>{html.escape(message)}</p>",
+    }
+
+
+def parse_form(body):
+    try:
+        return parse_qs(
+            body or "",
+            keep_blank_values=True,
+            max_num_fields=MAX_FORM_FIELDS,
+        )
+    except ValueError:
+        raise ValidationError("Too many form fields")
+
+
+def require_text(form_data, field, max_chars):
+    value = form_data.get(field, [""])[0].strip()
+    if not value:
+        raise ValidationError(f"{field} is required")
+    if len(value) > max_chars:
+        raise ValidationError(f"{field} is too long")
+    return value
+
+
 EXTENSION = {
     ".html": "text/html",
     ".css": "text/css",
@@ -76,7 +116,11 @@ def login_route(method, path, session_id, body, query_params=None):
             ),
         }
     elif method == "POST":
-        form_data = parse_qs(body or "")
+        try:
+            form_data = parse_form(body)
+        except ValidationError as exc:
+            return validation_response(str(exc), status=413)
+
         if not verify_csrf_token(session_id, form_data):
             logger.warning("csrf_failed route=/login session_id=%s", session_id)
             return {
@@ -84,8 +128,12 @@ def login_route(method, path, session_id, body, query_params=None):
                 "headers": {"Content-type": "text/html"},
                 "body": "<h1>Forbidden</h1><p>Invalid CSRF Token</p>",
             }
-        username = form_data.get("username", [""])[0]
-        password = form_data.get("password", [""])[0]
+        try:
+            username = require_text(form_data, "username", MAX_USERNAME_CHARS)
+            password = require_text(form_data, "password", MAX_PASSWORD_CHARS)
+        except ValidationError as exc:
+            return validation_response(str(exc))
+
         user = get_user_by_username(username)
 
         if user and verify_password(password, user["password_hash"]):
@@ -108,7 +156,7 @@ def login_route(method, path, session_id, body, query_params=None):
         }
 
 
-def logout_route(method, path, session_id, body):
+def logout_route(method, path, session_id, body, query_params=None):
     logout_user(session_id)
     return {
         "status": 303,
@@ -118,8 +166,8 @@ def logout_route(method, path, session_id, body):
 
 
 def extract_data_body(body, user_id):
-    form_data = parse_qs(body or "")
-    message = html.escape(form_data.get("message", [""])[0], quote=True)
+    form_data = parse_form(body)
+    message = html.escape(require_text(form_data, "message", MAX_MESSAGE_CHARS), quote=True)
     add_message(user_id, message)
     return message
 
@@ -153,7 +201,7 @@ def home_handler(method, path, session_id=None, body=None, query_params=None):
     }
 
 
-def about_handler(response, path, session_id=None, body=None):
+def about_handler(response, path, session_id=None, body=None, query_params=None):
     return {
         "status": 200,
         "headers": {"Content-Type": "text/html"},
@@ -161,7 +209,7 @@ def about_handler(response, path, session_id=None, body=None):
     }
 
 
-def contact_handler(response, path, session_id=None, body=None):
+def contact_handler(response, path, session_id=None, body=None, query_params=None):
     return {
         "status": 200,
         "headers": {"Content-Type": "text/html"},
@@ -177,7 +225,7 @@ def not_found_handler(request):
     }
 
 
-def submit_handler(method, path, session_id=None, body=None):
+def submit_handler(method, path, session_id=None, body=None, query_params=None):
     user = get_logged_in_user(session_id)
     if user is None:
         return {
@@ -185,7 +233,11 @@ def submit_handler(method, path, session_id=None, body=None):
             "headers": {"Content-Type": "text/html", "Location": "/login"},
             "body": "",
         }
-    form_data = parse_qs(body or "")                                                                                                      
+    try:
+        form_data = parse_form(body)
+    except ValidationError as exc:
+        return validation_response(str(exc), status=413)
+
     if not verify_csrf_token(session_id, form_data):                                                                                      
         logger.warning("csrf_failed route=/submit session_id=%s", session_id)
         return {                                                                                                                          
@@ -193,7 +245,12 @@ def submit_handler(method, path, session_id=None, body=None):
           "headers": {"Content-Type": "text/html"},                                                                                     
           "body": "<h1>Forbidden</h1><p>Invalid CSRF token</p>",                                                                        
         } 
-    extract_data_body(body, user["id"])
+    try:
+        message = html.escape(require_text(form_data, "message", MAX_MESSAGE_CHARS), quote=True)
+    except ValidationError as exc:
+        return validation_response(str(exc))
+
+    add_message(user["id"], message)
     set_session_data(session_id, "flash", "Message sent")
     return {
         "status": 303,
@@ -219,6 +276,8 @@ def messages_handler(method, path, session_id=None, body=None, query_params=None
 
     if page < 1:
          page = 1
+    if page > MAX_QUERY_PAGE:
+         page = MAX_QUERY_PAGE
 
     per_page = 10
     offset = (page - 1) * per_page

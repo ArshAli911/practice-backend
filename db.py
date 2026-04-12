@@ -1,95 +1,87 @@
 import sqlite3
+from contextlib import contextmanager
 
-db_name= "app.db"
+db_name = "app.db"
 
+
+@contextmanager
 def get_conn():
-    conn = sqlite3.connect(db_name)
+    conn = sqlite3.connect(db_name, timeout=5)
     conn.row_factory = sqlite3.Row
-    return conn
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
-conn = get_conn()
-cur = conn.cursor()
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash BLOB NOT NULL,
-            role TEXT NOT NULL DEFAULT 'user' 
-            )
-""")
-cur.execute(" UPDATE users SET role = 'admin' WHERE username = 'demo';")
-user_columns = {
-    row["name"]
-    for row in cur.execute("PRAGMA table_info(users)").fetchall()
-}
-if "role" not in user_columns:
-    cur.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
-    
-cur.execute("""
-CREATE TABLE IF NOT EXISTS messages(
-            id INTEGER PRIMARY KEY  AUTOINCREMENT,
-            user_id INTEGER,
-            content TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(user_id) REFERENCES users(id)
-            )
-""")
-conn.commit()
-conn.close()
+def init_db():
+    with get_conn() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS users(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash BLOB NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'user' 
+                    )
+        """)
+        conn.execute("UPDATE users SET role = 'admin' WHERE username = 'demo'")
+        user_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "role" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS messages(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                    )
+        """)
+
 
 def get_user_by_username(username):
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM users WHERE username = ?", (username,))
-    user = cur.fetchone()
-
-    conn.close()
-    return user
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM users WHERE username = ?",
+            (username,)
+        ).fetchone()
 
 def get_user_by_id(user_id):
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-    user = cur.fetchone()
-
-    conn.close()
-    return user
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM users WHERE id = ?",
+            (user_id,)
+        ).fetchone()
 
 def create_user_db(username, password_hash, role="user"):
-    conn = get_conn()
-    cur = conn.cursor()
-
     try:
-        cur.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (?,?,?)",
-            (username, password_hash, role)
-        )
-        conn.commit()
+        with get_conn() as conn:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role) VALUES (?,?,?)",
+                (username, password_hash, role)
+            )
     except sqlite3.IntegrityError:
-        conn.close()
         return None
-    conn.close()
     return True
 
 def add_message(user_id, content):
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("INSERT INTO messages(user_id, content) VALUES (?,?)",
-                 (user_id, content)
-)
-    
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO messages(user_id, content) VALUES (?,?)",
+            (user_id, content)
+        )
 
 
 def list_messages(limit=None, offset=0):
-    conn = get_conn()
-    cur = conn.cursor()
-
     sql = """
         SELECT messages.id, messages.content, messages.created_at, users.username
         FROM messages
@@ -102,21 +94,11 @@ def list_messages(limit=None, offset=0):
         sql += " LIMIT ? OFFSET ?"
         params = (limit, offset)
 
-    cur.execute(sql, params)
-
-    rows = cur.fetchall()
-    conn.close()
-
-    return rows
+    with get_conn() as conn:
+        return conn.execute(sql, params).fetchall()
 
 
 def count_messages():
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("SELECT COUNT(*) AS total FROM messages")
-    total = cur.fetchone()["total"]
-
-    conn.close()
-    return total
+    with get_conn() as conn:
+        return conn.execute("SELECT COUNT(*) AS total FROM messages").fetchone()["total"]
     

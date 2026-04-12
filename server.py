@@ -1,6 +1,8 @@
 import os
 import socket
 from datetime import datetime, timedelta, timezone
+from db import init_db
+from limits import MAX_BODY_BYTES, MAX_HEADER_BYTES
 from rate_limit import rate_limited
 from route import EXTENSION, method_routes
 from sessions import create_sessions, get_session
@@ -12,8 +14,6 @@ HOST = "127.0.0.1"
 PORT = 8080
 SESSION_TTL_SECONDS = 3600
 
-MAX_HEADER_BYTES = 8192                                                                                                               
-MAX_BODY_BYTES = 1024 * 1024                                                                                                          
 RECV_CHUNK_SIZE = 1024 
 GENERAL_RATE_LIMIT = 100                                                                                                              
 GENERAL_RATE_WINDOW_SECONDS = 60                                                                                                      
@@ -58,6 +58,11 @@ def error_response(status, body):
     })
 
 logger = setup_logging()
+
+
+init_db()
+
+
 def parse_cookies(cookie_header):
     cookies = {}
     for item in cookie_header.split(";"):
