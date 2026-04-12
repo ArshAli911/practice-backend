@@ -1,10 +1,9 @@
 from auth import get_logged_in_user
 from login_config import setup_logging
 
-
 logger = setup_logging()
 def require_login(handler):
-    def wrapped(method, path, session_id=None, body=None):
+    def wrapped(method, path, session_id=None, body=None, query_params=None):
         user = get_logged_in_user(session_id)
         if user is None:
             return {
@@ -12,13 +11,13 @@ def require_login(handler):
                 "headers": {"Content-Type": "text/html", "Location": "/login"},
                 "body": "",
             }
-        return handler(method, path, session_id, body)
+        return handler(method, path, session_id, body, query_params)
     return wrapped
 
 
 def require_role(role):
     def decorator(handler):
-        def wrapped(method, path, session_id=None, body=None):
+        def wrapped(method, path, session_id=None, body=None, query_params=None):
             user = get_logged_in_user(session_id)
             if user is None:
                 return {
@@ -33,7 +32,7 @@ def require_role(role):
                     "headers": {"Content-Type": "text/html"},
                     "body": "<h1>Forbidden</h1>",
                 }
-            return handler(method, path, session_id, body)
+            return handler(method, path, session_id, body, query_params)
 
         return wrapped
 
@@ -41,7 +40,7 @@ def require_role(role):
 
 
 def redir_if_logged_in(handler):
-    def wrapped(method, path, session_id=None, body=None):
+    def wrapped(method, path, session_id=None, body=None, query_params=None):
         user = get_logged_in_user(session_id)
         if user is not None:
             return {
@@ -49,6 +48,6 @@ def redir_if_logged_in(handler):
                 "headers": {"Content-Type": "text/html", "Location": "/"},
                 "body": "",
             }
-        return handler(method, path, session_id, body)
+        return handler(method, path, session_id, body, query_params)
 
     return wrapped

@@ -5,7 +5,7 @@ from rate_limit import rate_limited
 from route import EXTENSION, method_routes
 from sessions import create_sessions, get_session
 from login_config import setup_logging
-
+from urllib.parse import parse_qs
 
 
 HOST = "127.0.0.1"
@@ -38,6 +38,7 @@ def build_http_response(resp):
         413: "Payload Too Large",
         414: "URL Too Long",
         429: "Too Many Requests",
+        500: "Internal Server Error",
     }
 
     status_line = f"HTTP/1.1 {resp['status']} {status_messages.get(resp['status'], '')}\r\n"
@@ -48,7 +49,7 @@ def build_http_response(resp):
 
     return status_line + headers + "\r\n" + resp["body"]
 
-
+ 
 def error_response(status, body):
     return build_http_response({
         "status": status,
@@ -191,26 +192,29 @@ while True:
     body = raw_body or None
     if method != "POST":
         body = None
-
-    path = path.split("?", 1)[0]
+    route_path, _, query_string = path.partition("?")
+    query_params = parse_qs(query_string)
+    path = route_path
     if path != "/" and path.endswith("/"):
         path = path.rstrip("/")
 
     logger.info("request method=%s path=%s ip=%s", method, path, client_ip)
 
     handler = method_routes.get((method, path))
-
     if handler:
-        resp_dict = handler(method, path, session_id, body)
-        rotated_session_id = resp_dict.pop("session_id", None)
-        if rotated_session_id is not None:
-            session_id = rotated_session_id
-            resp_dict["headers"]["Set-Cookie"] = build_session_cookie(session_id)
-        elif new_session:
-            resp_dict["headers"]["Set-Cookie"] = build_session_cookie(session_id)
-
-        http_response = build_http_response(resp_dict)
-        conn.send(http_response.encode())
+        try:
+            resp_dict = handler(method, path, session_id, body, query_params)
+            rotated_session_id = resp_dict.pop("session_id", None)
+            if rotated_session_id is not None:
+                session_id = rotated_session_id
+                resp_dict["headers"]["Set-Cookie"] = build_session_cookie(session_id)
+            elif new_session:
+                resp_dict["headers"]["Set-Cookie"] = build_session_cookie(session_id)
+            http_response = build_http_response(resp_dict)
+            conn.send(http_response.encode())
+        except Exception:
+            logger.exception("handler_error method=%s path=%s ip=%s", method, path, client_ip)
+            conn.send(error_response(500, "<h1>Internal Server Error</h1>").encode())
         conn.close()
         continue
 
@@ -238,4 +242,7 @@ while True:
     except FileNotFoundError:
         response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\n\r\n<h1>404 Not Found</h1>"
         conn.send(response.encode())
+    except Exception:
+        logger.exception("static_file_error path=%s file=%s ip=%s", path, file_name, client_ip)
+        conn.send(error_response(500, "<h1>Internal Server Error</h1>").encode())
     conn.close()

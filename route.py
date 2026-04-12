@@ -13,7 +13,7 @@ from auth import (
     logout_user,
     verify_password,
 )
-from db import add_message, list_messages
+from db import add_message, count_messages, list_messages
 from middleware import redir_if_logged_in, require_login, require_role
 from sessions import del_session_data, get_session_data, rotate_session, set_session_data
 logger = setup_logging()
@@ -45,7 +45,7 @@ def verify_csrf_token(session_id, form_data):
         hmac.compare_digest(sent_token, stored_token)
         )
         
-def admin_handler(method, path, session_id=None, body=None):
+def admin_handler(method, path, session_id=None, body=None, query_params=None):
     user = get_logged_in_user(session_id)
     if user is None:
         return {
@@ -60,7 +60,7 @@ def admin_handler(method, path, session_id=None, body=None):
     }
 
 
-def login_route(method, path, session_id, body):
+def login_route(method, path, session_id, body, query_params=None):
     if method == "GET":
         csrf_token = ensure_csrf_token(session_id)
         return {
@@ -124,7 +124,7 @@ def extract_data_body(body, user_id):
     return message
 
 
-def home_handler(method, path, session_id=None, body=None):
+def home_handler(method, path, session_id=None, body=None, query_params=None):
     user = get_logged_in_user(session_id)
     if user is None:
         return {
@@ -202,7 +202,7 @@ def submit_handler(method, path, session_id=None, body=None):
     }
 
 
-def messages_handler(method, path, session_id=None, body=None):
+def messages_handler(method, path, session_id=None, body=None, query_params=None):
     user = get_logged_in_user(session_id)
     if user is None:
         return {
@@ -211,12 +211,27 @@ def messages_handler(method, path, session_id=None, body=None):
             "body": "",
         }
 
-    saved_messages = load_messages()
+    query_params = query_params or {}
+    try:
+         page = int(query_params.get("page", ["1"])[0])
+    except (ValueError, TypeError):
+         page = 1
+
+    if page < 1:
+         page = 1
+
+    per_page = 10
+    offset = (page - 1) * per_page
+    total_messages = count_messages()
+    rows = list_messages(limit=per_page, offset=offset)
+    saved_messages = format_messages(rows)
     msg = get_session_data(session_id, "flash")
     del_session_data(session_id, "flash")
 
     flash_html = f"<p>{html.escape(msg)}</p>" if msg else ""
     messages_html = f"<pre>{saved_messages}</pre>" if saved_messages else "<p>No messages yet.</p>"
+    prev_link = f"<a href='/messages?page={page - 1}'>Previous</a>" if page > 1 else ""
+    next_link = f"<a href='/messages?page={page + 1}'>Next</a>" if offset + per_page < total_messages else ""
 
     return {
         "status": 200,
@@ -233,6 +248,7 @@ def messages_handler(method, path, session_id=None, body=None):
             "<h1>Messages</h1>"
             f"{flash_html}"
             f"{messages_html}"
+            f"<p>{prev_link} {next_link}</p>"
             "<p><a href='/'>Back to home</a></p>"
             "</body>"
             "</html>"
@@ -242,6 +258,10 @@ def messages_handler(method, path, session_id=None, body=None):
 
 def load_messages():
     rows = list_messages()
+    return format_messages(rows)
+
+
+def format_messages(rows):
     return "\n".join(f"{row['username']}: {row['content']}" for row in rows)
 
 

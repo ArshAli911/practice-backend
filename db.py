@@ -86,20 +86,37 @@ def add_message(user_id, content):
     conn.close()
 
 
-def list_messages():
+def list_messages(limit=None, offset=0):
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute("""
+    sql = """
         SELECT messages.id, messages.content, messages.created_at, users.username
         FROM messages
         LEFT JOIN users ON messages.user_id = users.id
         ORDER BY messages.created_at DESC
-    """)
+    """
+    params = ()
+
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = (limit, offset)
+
+    cur.execute(sql, params)
 
     rows = cur.fetchall()
     conn.close()
 
     return rows
-    
 
+
+def count_messages():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS total FROM messages")
+    total = cur.fetchone()["total"]
+
+    conn.close()
+    return total
+    
